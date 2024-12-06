@@ -29,13 +29,106 @@
 #include "synchdisk.h"
 #include "main.h"
 
+void LinkedDataSector::FetchFromSector(int sector) {
+	char buf[SectorSize];
+	kernel->synchDisk->ReadSector(sector, buf);
+
+	memcpy(&linkSector, buf, sizeof(int));
+	memcpy(&dataSectors, buf + sizeof(int), LinkedDirect * sizeof(int));
+	//DEBUG(dbgFile, "Read linked list from sector #" << sector << ", while next item is at sector #" << linkSector << " (-1 = end).");
+}
+
+void LinkedDataSector::WriteBackSector(int sector) {
+	char buf[SectorSize];
+	memcpy(buf, &linkSector, sizeof(int));
+	memcpy(buf + sizeof(int), &dataSectors, LinkedDirect * sizeof(int));
+	
+	kernel->synchDisk->WriteSector(sector, buf);
+	DEBUG(dbgFile, "Write linked list to sector #" << sector << ", while next item is at sector #" << linkSector << " (-1 = end)");
+}
+
 void LinkedDataSector::Debug()  {
 	if (next == NULL) {
-		DEBUG(dbgFile, linkSector << "{ " << dataSectors[0] << ", " << dataSectors[1] << "... }" << " -> end\n");
+		cout << "{ " << dataSectors[0] << ", " << dataSectors[1] << "... }" << " -> end\n";
 	} 
 	else {
-		DEBUG(dbgFile, linkSector << "{ " << dataSectors[0] << ", " << dataSectors[1] << "... }" << " -> ");
+		cout << "{ " << dataSectors[0] << " ~ " << dataSectors[LinkedDirect - 1] << " }" << " -- " << linkSector << " -> ";
 		next->Debug();
+	}
+}
+
+LinkedDataSector *SeqDataSectors::Allocate(PersistentBitmap *freeMap, int fileSize) {
+	int numSectors = divRoundUp(fileSize, SectorSize);
+	if (freeMap->NumClear() < numSectors) {
+		cerr << "Not enough space!\n";
+		return FALSE; // not enough space
+	}
+
+	LinkedDataSector *curr = NULL;
+	int assigned = 0;
+	while (assigned < numSectors) {
+		if (front == -1) {
+			front = freeMap->FindAndSet();
+			ASSERT(front >= 0);
+			curr = list = new LinkedDataSector;
+			DEBUG(dbgFile, "Set front of the linked list, stored in sector #" << front << ".");
+		} else {
+			int sector = freeMap->FindAndSet();
+			ASSERT(sector >= 0);
+			curr = curr->Push(sector);
+			DEBUG(dbgFile, "Add new item into linked list, stored in sector #" << sector << ".");
+		}
+		for (int idx = 0; idx < LinkedDirect && assigned < numSectors; idx++, assigned++) {
+			int sector = freeMap->FindAndSet();
+			ASSERT(sector >= 0);
+			curr->AssignSector(idx, sector);
+			DEBUG(dbgFile, "Assign sector #" << sector << " to #" << idx << " item.");
+		}
+	}
+	Debug();
+}
+
+void SeqDataSectors::Deallocate(PersistentBitmap *freeMap) {
+	if (front == -1) return;
+
+	int targetSector = front;
+	LinkedDataSector *curr = list;
+	do {
+		for (int i = 0; i < LinkedDirect && curr->Data(i) != -1; i++) {
+			freeMap->Clear(curr->Data(i));
+		}
+		freeMap->Clear(targetSector);
+		targetSector = curr->Link();
+		curr = curr->Next();
+	} while (targetSector != -1);
+}
+
+void SeqDataSectors::FetchFrom(char *buf) {
+	memcpy(&front, buf, sizeof(int));
+	LinkedDataSector *curr = list = new LinkedDataSector;
+	curr->FetchFromSector(front);
+	
+	if (front == -1) return;
+
+	int link;
+	while ((link = curr->Link()) != -1) {
+		curr = curr->Push(link);
+		curr->FetchFromSector(link);
+	}
+}
+
+void SeqDataSectors::WriteBack(char *buf) {
+	memcpy(buf, &front, sizeof(int));
+
+	if (front == -1) return;
+	
+	LinkedDataSector *curr = list;
+	curr->WriteBackSector(front);
+	
+	int link;
+	while ((link = curr->Link()) != -1) {
+		curr = curr->Next();
+		curr->WriteBackSector(link);
 	}
 }
 
@@ -50,7 +143,6 @@ FileHeader::FileHeader()
 {
 	numBytes = -1;
 	numSectors = -1;
-	dataSectorList = NULL;
 }
 
 //----------------------------------------------------------------------
@@ -62,12 +154,6 @@ FileHeader::FileHeader()
 //----------------------------------------------------------------------
 FileHeader::~FileHeader()
 {
-	LinkedDataSector *curr = dataSectorList;
-	while (curr != NULL) {
-		LinkedDataSector *next = curr->Next();
-		delete curr;
-		curr = next;
-	}
 }
 
 //----------------------------------------------------------------------
@@ -84,26 +170,7 @@ FileHeader::~FileHeader()
 bool FileHeader::Allocate(PersistentBitmap *freeMap, int fileSize)
 {
 	numBytes = fileSize;
-	numSectors = divRoundUp(fileSize, SectorSize);
-	if (freeMap->NumClear() < numSectors)
-		return FALSE; // not enough space
-
-	dataSectorListFront = -1;
-	LinkedDataSector *curr = NULL;
-	int assigned = 0;
-	while (assigned < numSectors) {
-		if (dataSectorListFront == -1) {
-			dataSectorListFront = freeMap->FindAndSet();
-			curr = dataSectorList = new LinkedDataSector;
-		} else {
-			curr = curr->Push(freeMap->FindAndSet());
-		}
-		for (int idx = 0; idx < LinkedDirect && assigned < numSectors; idx++, assigned++) {
-			curr->AssignSector(idx, freeMap->FindAndSet());
-		}
-		DEBUG(dbgFile, "Assign sector #" << (curr->Link() == -1 ? dataSectorListFront : curr->Link()) << " to #" << assigned / LinkedDirect + 1 << " item in linked list");
-	}
-	curr->Debug();
+	dataSectorList.Allocate(freeMap, fileSize);
 	return TRUE;
 }
 
@@ -116,18 +183,7 @@ bool FileHeader::Allocate(PersistentBitmap *freeMap, int fileSize)
 
 void FileHeader::Deallocate(PersistentBitmap *freeMap)
 {
-	if (dataSectorListFront == -1) return;
-
-	int targetSector = dataSectorListFront;
-	LinkedDataSector *curr = dataSectorList;
-	do {
-		for (int i = 0; i < LinkedDirect && curr->Data(i) != -1; i++) {
-			freeMap->Clear(curr->Data(i));
-		}
-		freeMap->Clear(targetSector);
-		targetSector = curr->Link();
-		curr = curr->Next();
-	} while (targetSector != -1);
+	dataSectorList.Deallocate(freeMap);
 }
 
 //----------------------------------------------------------------------
@@ -136,14 +192,6 @@ void FileHeader::Deallocate(PersistentBitmap *freeMap)
 //
 //	"sector" is the disk sector containing the file header
 //----------------------------------------------------------------------
-
-void LinkedDataSector::ReadFromSector(int sector) {
-	char buf[SectorSize];
-	kernel->synchDisk->ReadSector(sector, buf);
-
-	memcpy(&linkSector, buf, sizeof(int));
-	memcpy(&dataSectors, buf + sizeof(int), LinkedDirect * sizeof(int));
-}
 
 void FileHeader::FetchFrom(int sector)
 {
@@ -156,20 +204,7 @@ void FileHeader::FetchFrom(int sector)
 	memcpy(&numSectors, buf + offset, sizeof(int));
 	offset += sizeof(numSectors);
 
-	memcpy(&dataSectorListFront, buf + offset, sizeof(int));
-	LinkedDataSector *curr = dataSectorList = new LinkedDataSector;
-	curr->ReadFromSector(dataSectorListFront);
-	
-	int link;
-	while ((link = curr->Link()) != -1) {
-		curr = curr->Push(link);
-		curr->ReadFromSector(link);
-	}
-
-	/*
-		MP4 Hint:
-		After you add some in-core informations, you will need to rebuild the header's structure
-	*/
+	dataSectorList.FetchFrom(buf + offset);
 }
 
 //----------------------------------------------------------------------
@@ -178,14 +213,6 @@ void FileHeader::FetchFrom(int sector)
 //
 //	"sector" is the disk sector to contain the file header
 //----------------------------------------------------------------------
-
-void LinkedDataSector::WriteBackSector(int sector) {
-	char buf[SectorSize];
-	memcpy(buf, &linkSector, sizeof(int));
-	memcpy(buf + sizeof(int), &dataSectors, LinkedDirect * sizeof(int));
-	
-	kernel->synchDisk->WriteSector(sector, buf);
-}
 
 void FileHeader::WriteBack(int sector)
 {
@@ -196,28 +223,10 @@ void FileHeader::WriteBack(int sector)
 	offset += sizeof(numBytes);
 	memcpy(buf + offset, &numSectors, sizeof(int));
 	offset += sizeof(numSectors);
-	memcpy(buf + offset, &dataSectorListFront, sizeof(int));
+	//memcpy(buf + offset, &dataSectorListFront, sizeof(int));
+	dataSectorList.WriteBack(buf + offset);
+
     kernel->synchDisk->WriteSector(sector, buf);
-
-	if (dataSectorListFront == -1) return;
-	
-	LinkedDataSector *curr = dataSectorList;
-	curr->WriteBackSector(dataSectorListFront);
-	
-	int link;
-	while ((link = curr->Link()) != -1) {
-		curr->WriteBackSector(link);
-		curr = curr->Next();
-	}
-
-	/*
-		MP4 Hint:
-		After you add some in-core informations, you may not want to write all fields into disk.
-		Use this instead:
-		char buf[SectorSize];
-		memcpy(buf + offset, &dataToBeWritten, sizeof(dataToBeWritten));
-		...
-	*/
 }
 
 //----------------------------------------------------------------------
@@ -230,12 +239,19 @@ void FileHeader::WriteBack(int sector)
 //	"offset" is the location within the file of the byte in question
 //----------------------------------------------------------------------
 
+int SeqDataSectors::GetSector(int offset) {
+	int numSectors = offset / SectorSize;
+	LinkedDataSector *target = list;
+	for (int i = 0; i < numSectors / LinkedDirect; i++) {
+		target = target->Next();
+		ASSERT(target != NULL);
+	}
+	return target->Data(numSectors % LinkedDirect);
+}
+
 int FileHeader::ByteToSector(int offset)
 {
-	//return (dataSectors[offset / SectorSize]);
-	int numSectors = offset / SectorSize;
-	LinkedDataSector *target = dataSectorList;
-	return target->Data(numSectors % LinkedDirect);
+	return dataSectorList.GetSector(offset);
 }
 
 //----------------------------------------------------------------------

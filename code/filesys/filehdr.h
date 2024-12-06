@@ -19,7 +19,6 @@
 #include "list.h"
 
 #define NumDirect ((SectorSize - 2 * sizeof(int)) / sizeof(int))
-#define MaxFileSize (NumDirect * SectorSize)
 #define LinkedDirect ((SectorSize - sizeof(int)) / sizeof(int))
 
 class LinkedDataSector {
@@ -30,6 +29,7 @@ public:
 	LinkedDataSector(): linkSector(-1), next(NULL) {
 		for (int i = 0; i < LinkedDirect; i++) dataSectors[i] = -1;
 	}
+	~LinkedDataSector() { delete next; }
 
 	int Link() { return linkSector; }
 	
@@ -38,15 +38,31 @@ public:
 	
 	LinkedDataSector *Next() { return next; }
 	LinkedDataSector *Push(int sector) { linkSector = sector; next = new LinkedDataSector; return next; }
-	
+
 	void Debug();
-	void ReadFromSector(int sector);
+
+	void FetchFromSector(int sector);
 	void WriteBackSector(int sector);
 
 private:
 	int linkSector;					// Both stored in disk
 	int dataSectors[LinkedDirect];
 	LinkedDataSector *next; // In-core member, was NULL
+};
+
+class SeqDataSectors {
+public:
+	SeqDataSectors(): front(-1), list(NULL) {}
+	~SeqDataSectors() { delete list; }
+	LinkedDataSector *Allocate(PersistentBitmap *freeMap, int fileSize);
+	void Deallocate(PersistentBitmap *freeMap);
+	void FetchFrom(char *buf);
+	void WriteBack(char *buf);
+	int GetSector(int offset);
+	void Debug() { cout << front << " -> "; list->Debug(); }
+private:
+	int front;
+	LinkedDataSector *list;
 };
 
 // The following class defines the Nachos "file header" (in UNIX terms,
@@ -111,7 +127,8 @@ private:
 	int dataSectors[NumDirect]; // Disk sector numbers for each data
 								// block in the file
 	int dataSectorListFront;
-	LinkedDataSector *dataSectorList;
+	//LinkedDataSector *dataSectorList;
+	SeqDataSectors dataSectorList;
 };
 
 #endif // FILEHDR_H
