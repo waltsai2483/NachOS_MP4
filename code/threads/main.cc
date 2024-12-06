@@ -102,9 +102,12 @@ static void Copy(char *from, char *to)
         Close(fd);
         return;
     }
+    DEBUG('f', "Opening File...");
 
     openFile = kernel->fileSystem->Open(to);
     ASSERT(openFile != NULL);
+    
+    DEBUG('f', "Successfully opened file.");
 
     // Copy the data in TransferSize chunks
     buffer = new char[TransferSize];
@@ -153,7 +156,7 @@ void Print(char *name)
 //----------------------------------------------------------------------
 static void CreateDirectory(char *name)
 {
-    // MP4 Assignment
+    kernel->fileSystem->TraverseDirectory(name);
 }
 
 //----------------------------------------------------------------------
@@ -268,7 +271,6 @@ int main(int argc, char **argv)
             // recursive list
             ASSERT(i + 1 < argc);
             listDirectoryName = argv[i + 1];
-            dirListFlag = true;
             recursiveListFlag = true;
             i++;
         }
@@ -338,6 +340,9 @@ int main(int argc, char **argv)
     if (dirListFlag)
     {
         kernel->fileSystem->List();
+    }
+    if (recursiveListFlag) {
+        kernel->fileSystem->ListRecursively();
     }
     if (mkdirFlag)
     {

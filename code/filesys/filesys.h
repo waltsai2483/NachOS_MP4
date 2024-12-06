@@ -36,8 +36,14 @@
 #include "copyright.h"
 #include "sysdep.h"
 #include "openfile.h"
+#include "directory.h"
 
 typedef int OpenFileId;
+
+typedef struct {
+	int dirSector;
+	char name[FileNameMaxLen];
+} Path;
 
 #ifdef FILESYS_STUB // Temporarily implement file system calls as
 // calls to UNIX, until the real file system
@@ -90,6 +96,10 @@ public:
 
 	bool Create(char *name, int initialSize);
 	// Create a file (UNIX creat)
+	
+	Path DescribePath(char *path);
+
+	int TraverseDirectory(char *path); // Traverse and return the sector # of the directory
 
 	OpenFile *Open(char *name); // Open a file (UNIX open)
 
@@ -104,6 +114,8 @@ public:
 	bool Remove(char *name); // Delete a file (UNIX unlink)
 
 	void List(); // List all the files in the file system
+
+	void ListRecursively(); // List all the files and all files under the subdirectories
 
 	void Print(); // List all the files and their contents
 

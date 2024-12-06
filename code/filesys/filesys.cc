@@ -62,7 +62,6 @@
 // supports extensible files, the directory size sets the maximum number
 // of files that can be loaded onto the disk.
 #define FreeMapFileSize (NumSectors / BitsInByte)
-#define NumDirEntries 10
 #define DirectoryFileSize (sizeof(DirectoryEntry) * NumDirEntries)
 
 //----------------------------------------------------------------------
@@ -152,9 +151,51 @@ FileSystem::FileSystem(bool format)
 //----------------------------------------------------------------------
 FileSystem::~FileSystem()
 {
+    delete openedFile;
     delete freeMapFile;
     delete directoryFile;
 }
+
+Path FileSystem::DescribePath(char *path) {
+    int len = strlen(path);
+
+    Path obj;
+    obj.dirSector = -1;
+    memset(obj.name, '\0', FileNameMaxLen * sizeof(char));
+    
+    char dir[len];
+    memset(dir, '\0', len * sizeof(char));
+    int dirEnd = -1;
+    for (int i = len - 1; i >= 0; i--) {
+        if (path[i] == '/') {
+            dirEnd = i;
+            break;
+        }
+    }
+
+    ASSERT(dirEnd >= 0);
+
+    int count = 0;
+    for (int i = 0; i < len; i++) {
+        if (i == dirEnd) {
+            if (dirEnd == 0) {
+                dir[count++] = '/';
+            }
+            dir[count] = '\0';
+            obj.name[0] = '/';
+            count = 1;
+        } else if (i < dirEnd) {
+            dir[count++] = path[i];
+        } else {
+            obj.name[count++] = path[i];
+        }
+    }
+    obj.name[count] = '\0';
+    obj.dirSector = TraverseDirectory(dir);
+
+    return obj;
+} 
+
 
 //----------------------------------------------------------------------
 // FileSystem::Create
@@ -188,25 +229,34 @@ FileSystem::~FileSystem()
 bool FileSystem::Create(char *name, int initialSize)
 {
     Directory *directory;
+    OpenFile *dirFile;
     PersistentBitmap *freeMap;
     FileHeader *hdr;
     int sector;
     bool success;
 
-    DEBUG(dbgFile, "Creating file " << name << " size " << initialSize);
+    char filename[FileNameMaxLen+1];
+
+    Path path = DescribePath(name);
+    ASSERT(path.dirSector >= 0);
+    DEBUG(dbgFile, "Split path " << name << " into dir sector = " << path.dirSector << " and filename " << path.name << ".");
 
     directory = new Directory(NumDirEntries);
-    directory->FetchFrom(directoryFile);
+    if (path.dirSector == DirectorySector) {
+        dirFile = directoryFile;
+    } else {
+        dirFile = new OpenFile(path.dirSector);
+    }
+    directory->FetchFrom(dirFile);
 
-    if (directory->Find(name) != -1)
+    if (directory->Find(path.name) != -1)
         success = FALSE; // file is already in directory
-    else
-    {
+    else {
         freeMap = new PersistentBitmap(freeMapFile, NumSectors);
         sector = freeMap->FindAndSet(); // find a sector to hold the file header
         if (sector == -1)
             success = FALSE; // no free block for file header
-        else if (!directory->Add(name, sector))
+        else if (!directory->Add(path.name, sector))
             success = FALSE; // no space in directory
         else
         {
@@ -218,7 +268,7 @@ bool FileSystem::Create(char *name, int initialSize)
                 success = TRUE;
                 // everthing worked, flush all changes back to disk
                 hdr->WriteBack(sector);
-                directory->WriteBack(directoryFile);
+                directory->WriteBack(dirFile);
                 freeMap->WriteBack(freeMapFile);
             }
             delete hdr;
@@ -226,7 +276,73 @@ bool FileSystem::Create(char *name, int initialSize)
         delete freeMap;
     }
     delete directory;
+    if (dirFile != directoryFile) delete dirFile;
     return success;
+}
+
+int FileSystem::TraverseDirectory(char *path)
+{
+    char dirname[FileNameMaxLen + 1];
+    memset(dirname, '\0', FileNameMaxLen * sizeof(char));
+
+    ASSERT(path[0] == '/'); // Invalid directory format
+    
+    int curr = 1, idx = 0;
+    Directory *currDir = new Directory(NumDirEntries);
+    OpenFile *currDirFile = directoryFile;
+    PersistentBitmap *freeMap = new PersistentBitmap(freeMapFile, NumSectors);
+    int subdirSector;
+
+    while (true) {
+        if (path[curr] == '/' || path[curr] == '\0') {
+            if (dirname[0] == '\0' && path[curr] == '\0') { // Root directory
+                DEBUG(dbgFile, "The directory /" << dirname << " is root directory, which is in sector #" << subdirSector);
+                delete freeMap;
+                delete currDir;
+                return DirectorySector;
+            }
+
+            currDir->FetchFrom(currDirFile);
+            subdirSector = currDir->Find(dirname);
+
+            if (subdirSector == -1) { // Subdir not found, must create one.
+                subdirSector = freeMap->FindAndSet(); // Find a sector to store dir header
+                ASSERT(subdirSector >= 0);
+
+                FileHeader *dirHdr = new FileHeader;
+                ASSERT(dirHdr->Allocate(freeMap, DirectoryFileSize)); // problem?
+                // DEBUG(dbgFile, "probe");
+
+                freeMap->Mark(subdirSector);
+                currDir->Add(dirname, subdirSector, TRUE);
+
+                dirHdr->WriteBack(subdirSector);
+                currDir->WriteBack(currDirFile);
+                freeMap->WriteBack(freeMapFile);
+                DEBUG(dbgFile, "Create directory /" << dirname << " with data stored in sector #" << subdirSector);
+                
+                delete dirHdr;
+            } else {
+                DEBUG(dbgFile, "Successfully find directory /" << dirname << " with data stored in sector #" << subdirSector);
+            }
+            currDirFile = new OpenFile(subdirSector);
+
+            // After creating / routing to the subdirectory,
+            // the dirname should be reset.
+
+            memset(dirname, '\0', FileNameMaxLen * sizeof(char));    
+            idx = 0;
+        } else {
+            dirname[idx++] = path[curr];
+        }
+        if (path[curr] == '\0') break;
+        curr++;
+    }
+
+    delete currDir;
+    delete currDirFile;
+    delete freeMap;
+    return subdirSector;
 }
 
 //----------------------------------------------------------------------
@@ -242,15 +358,23 @@ bool FileSystem::Create(char *name, int initialSize)
 OpenFile * FileSystem::Open(char *name)
 {
     Directory *directory = new Directory(NumDirEntries);
-    OpenFile *openFile = NULL;
-    int sector;
+    OpenFile *dirFile;
+    Path path = DescribePath(name);
+    ASSERT(path.dirSector >= 0);
 
-    DEBUG(dbgFile, "Opening file" << name);
-    directory->FetchFrom(directoryFile);
-    sector = directory->Find(name);
-    if (sector >= 0)
-        openFile = new OpenFile(sector); // name was found in directory
+    dirFile = new OpenFile(path.dirSector);
+    directory->FetchFrom(dirFile);
+
+    int fileSector = directory->Find(path.name);
+    if (fileSector == -1) {
+        DEBUG(dbgFile, "File " << name << " does not exist!");
+        return NULL;
+    }
+
+    DEBUG(dbgFile, "Opening file " << path.name << " in sector #" << fileSector);
+    OpenFile *openFile = new OpenFile(fileSector); // name was found in directory
     delete directory;
+    delete dirFile;
     return openFile; // return NULL if not found
 }
 
@@ -334,6 +458,14 @@ void FileSystem::List()
 
     directory->FetchFrom(directoryFile);
     directory->List();
+    delete directory;
+}
+
+void FileSystem::ListRecursively() {
+    Directory *directory = new Directory(NumDirEntries);
+
+    directory->FetchFrom(directoryFile);
+    directory->ListRecursively(0);
     delete directory;
 }
 

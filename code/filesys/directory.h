@@ -19,8 +19,9 @@
 
 #include "openfile.h"
 
-#define FileNameMaxLen 9 // for simplicity, we assume \
+#define FileNameMaxLen 64 // for simplicity, we assume \
                          // file names are <= 9 characters long
+#define NumDirEntries 10
 
 // The following class defines a "directory entry", representing a file
 // in the directory.  Each entry gives the name of the file, and where
@@ -35,6 +36,7 @@ public:
     bool inUse;                    // Is this directory entry in use?
     int sector;                    // Location on disk to find the
                                    //   FileHeader for this file
+    bool isSubdir;
     char name[FileNameMaxLen + 1]; // Text name for file, with +1 for
                                    // the trailing '\0'
 };
@@ -64,11 +66,13 @@ public:
                           // FileHeader for file: "name"
 
     bool Add(char *name, int newSector); // Add a file name into the directory
+    bool Add(char *name, int newSector, bool isDirectory);
 
     bool Remove(char *name); // Remove a file from the directory
 
     void List();  // Print the names of all the files
                   //  in the directory
+    void ListRecursively(int depth);
     void Print(); // Verbose print of the contents
                   //  of the directory -- all the file
                   //  names and their contents.

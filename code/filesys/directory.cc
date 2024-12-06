@@ -22,6 +22,7 @@
 #include "copyright.h"
 #include "utility.h"
 #include "filehdr.h"
+#include "filesys.h"
 #include "directory.h"
 
 //----------------------------------------------------------------------
@@ -125,7 +126,11 @@ int Directory::Find(char *name)
 //	"newSector" -- the disk sector containing the added file's header
 //----------------------------------------------------------------------
 
-bool Directory::Add(char *name, int newSector)
+bool Directory::Add(char *name, int newSector) {
+    return Add(name, newSector, FALSE);
+}
+
+bool Directory::Add(char *name, int newSector, bool isDirectory)
 {
     if (FindIndex(name) != -1)
         return FALSE;
@@ -136,6 +141,7 @@ bool Directory::Add(char *name, int newSector)
             table[i].inUse = TRUE;
             strncpy(table[i].name, name, FileNameMaxLen);
             table[i].sector = newSector;
+            table[i].isSubdir = isDirectory;
             return TRUE;
         }
     return FALSE; // no space.  Fix when we have extensible files.
@@ -169,6 +175,30 @@ void Directory::List()
     for (int i = 0; i < tableSize; i++)
         if (table[i].inUse)
             printf("%s\n", table[i].name);
+}
+
+void Directory::ListRecursively(int depth) {
+    char *tab = new char[depth+1];
+    memset(tab, '\t', depth * sizeof(char));
+    tab[depth] = '\0';
+
+    for (int i = 0; i < tableSize; i++)
+        if (table[i].inUse) {
+            if (table[i].isSubdir) {
+                Directory *directory = new Directory(NumDirEntries);
+                OpenFile *file = new OpenFile(table[i].sector);
+
+                printf("%s[D] %s\n", tab, table[i].name);
+
+                directory->FetchFrom(file);
+                directory->ListRecursively(depth + 1);
+
+                delete file;
+                delete directory;
+            } else {
+                printf("%s[F] %s\n", tab, table[i].name + sizeof(char));
+            }
+        }
 }
 
 //----------------------------------------------------------------------
