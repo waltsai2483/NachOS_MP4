@@ -13,6 +13,7 @@
 // of liability and disclaimer of warranty provisions.
 
 #include "copyright.h"
+#include "pbitmap.h"
 
 #ifndef DIRECTORY_H
 #define DIRECTORY_H
@@ -72,7 +73,7 @@ public:
 
     void List();  // Print the names of all the files
                   //  in the directory
-    void ListRecursively(int depth);
+    void ListRecursively(PersistentBitmap *freeMap, int depth);
     void Print(); // Verbose print of the contents
                   //  of the directory -- all the file
                   //  names and their contents.

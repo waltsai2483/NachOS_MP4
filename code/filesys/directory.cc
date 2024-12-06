@@ -172,33 +172,40 @@ bool Directory::Remove(char *name)
 
 void Directory::List()
 {
+    DEBUG(dbgFile, "===== DEBUG =====");
+    for (int i = 0; i < tableSize; i++) {
+        if (table[i].inUse) {
+            DEBUG(dbgFile, table[i].sector);
+        }
+    }
+    DEBUG(dbgFile, "===== DEBUG =====");
     for (int i = 0; i < tableSize; i++)
         if (table[i].inUse)
             printf("%s\n", table[i].name);
 }
 
-void Directory::ListRecursively(int depth) {
+void Directory::ListRecursively(PersistentBitmap *freeMap, int depth) {
     char *tab = new char[depth+1];
     memset(tab, '\t', depth * sizeof(char));
     tab[depth] = '\0';
 
-    for (int i = 0; i < tableSize; i++)
+    for (int i = 0; i < tableSize; i++) {
         if (table[i].inUse) {
             if (table[i].isSubdir) {
                 Directory *directory = new Directory(NumDirEntries);
+                
                 OpenFile *file = new OpenFile(table[i].sector);
-
                 printf("%s[D] %s\n", tab, table[i].name);
 
                 directory->FetchFrom(file);
-                directory->ListRecursively(depth + 1);
-
+                directory->ListRecursively(freeMap, depth + 1);
                 delete file;
                 delete directory;
             } else {
                 printf("%s[F] %s\n", tab, table[i].name + sizeof(char));
             }
         }
+    }
 }
 
 //----------------------------------------------------------------------

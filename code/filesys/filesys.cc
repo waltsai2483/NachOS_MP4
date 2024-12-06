@@ -280,6 +280,7 @@ bool FileSystem::Create(char *name, int initialSize)
     return success;
 }
 
+// It will go thru every directory of the path, create one if it's not found.
 int FileSystem::TraverseDirectory(char *path)
 {
     char dirname[FileNameMaxLen + 1];
@@ -292,26 +293,31 @@ int FileSystem::TraverseDirectory(char *path)
     OpenFile *currDirFile = directoryFile;
     PersistentBitmap *freeMap = new PersistentBitmap(freeMapFile, NumSectors);
     int subdirSector;
+    Directory emptyDir(NumDirEntries);  // Use an empty directory instance
+                                        // as a template so that sectors of every
+                                        // dirs created can be resetted using it.
 
     while (true) {
         if (path[curr] == '/' || path[curr] == '\0') {
             if (dirname[0] == '\0' && path[curr] == '\0') { // Root directory
                 DEBUG(dbgFile, "The directory /" << dirname << " is root directory, which is in sector #" << subdirSector);
                 delete freeMap;
-                delete currDir;
+                delete currDir; // Note that do not delete the currDirFile
+                                // Because in root dir, the curr dir is directoryFile in fileSystem
                 return DirectorySector;
             }
+            DEBUG(dbgFile, "Create directory /" << dirname);
 
             currDir->FetchFrom(currDirFile);
             subdirSector = currDir->Find(dirname);
 
-            if (subdirSector == -1) { // Subdir not found, must create one.
+            // Subdir not found or corrupted (if invalid), must create one.
+            if (subdirSector == -1) { 
                 subdirSector = freeMap->FindAndSet(); // Find a sector to store dir header
                 ASSERT(subdirSector >= 0);
 
                 FileHeader *dirHdr = new FileHeader;
-                ASSERT(dirHdr->Allocate(freeMap, DirectoryFileSize)); // problem?
-                // DEBUG(dbgFile, "probe");
+                ASSERT(dirHdr->Allocate(freeMap, DirectoryFileSize));
 
                 freeMap->Mark(subdirSector);
                 currDir->Add(dirname, subdirSector, TRUE);
@@ -322,10 +328,13 @@ int FileSystem::TraverseDirectory(char *path)
                 DEBUG(dbgFile, "Create directory /" << dirname << " with data stored in sector #" << subdirSector);
                 
                 delete dirHdr;
+
+                currDirFile = new OpenFile(subdirSector); // Overwrite the subdir sector as an empty directory
+                emptyDir.WriteBack(currDirFile);
             } else {
+                currDirFile = new OpenFile(subdirSector);
                 DEBUG(dbgFile, "Successfully find directory /" << dirname << " with data stored in sector #" << subdirSector);
             }
-            currDirFile = new OpenFile(subdirSector);
 
             // After creating / routing to the subdirectory,
             // the dirname should be reset.
@@ -462,10 +471,11 @@ void FileSystem::List()
 }
 
 void FileSystem::ListRecursively() {
+    PersistentBitmap *freeMap = new PersistentBitmap(freeMapFile, NumSectors);
     Directory *directory = new Directory(NumDirEntries);
 
     directory->FetchFrom(directoryFile);
-    directory->ListRecursively(0);
+    directory->ListRecursively(freeMap, 0);
     delete directory;
 }
 

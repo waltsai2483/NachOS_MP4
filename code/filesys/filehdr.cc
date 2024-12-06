@@ -85,7 +85,7 @@ LinkedDataSector *SeqDataSectors::Allocate(PersistentBitmap *freeMap, int fileSi
 			DEBUG(dbgFile, "Assign sector #" << sector << " to #" << idx << " item.");
 		}
 	}
-	Debug();
+	if (debug->IsEnabled('f')) Debug();
 }
 
 void SeqDataSectors::Deallocate(PersistentBitmap *freeMap) {
