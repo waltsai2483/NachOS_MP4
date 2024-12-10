@@ -40,6 +40,7 @@ public:
 	LinkedDataSector *Push(int sector) { linkSector = sector; next = new LinkedDataSector; return next; }
 
 	void Debug();
+	void Print(int numBytes);
 
 	void FetchFromSector(int sector);
 	void WriteBackSector(int sector);
@@ -54,12 +55,13 @@ class SeqDataSectors {
 public:
 	SeqDataSectors(): front(-1), list(NULL) {}
 	~SeqDataSectors() { delete list; }
-	LinkedDataSector *Allocate(PersistentBitmap *freeMap, int fileSize);
+	bool Allocate(PersistentBitmap *freeMap, int fileSize);
 	void Deallocate(PersistentBitmap *freeMap);
 	void FetchFrom(char *buf);
 	void WriteBack(char *buf);
 	int GetSector(int offset);
 	void Debug() { cout << front << " -> "; list->Debug(); }
+	void Print(int numBytes) { list->Print(numBytes); }
 private:
 	int front;
 	LinkedDataSector *list;
@@ -124,11 +126,7 @@ private:
 
 	int numBytes;				// Number of bytes in the file
 	int numSectors;				// Number of data sectors in the file
-	int dataSectors[NumDirect]; // Disk sector numbers for each data
-								// block in the file
-	int dataSectorListFront;
-	//LinkedDataSector *dataSectorList;
-	SeqDataSectors dataSectorList;
+	SeqDataSectors dataSectorList;	// Disk sector numbers for each data block in the file
 };
 
 #endif // FILEHDR_H

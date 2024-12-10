@@ -57,7 +57,7 @@ void LinkedDataSector::Debug()  {
 	}
 }
 
-LinkedDataSector *SeqDataSectors::Allocate(PersistentBitmap *freeMap, int fileSize) {
+bool SeqDataSectors::Allocate(PersistentBitmap *freeMap, int fileSize) {
 	int numSectors = divRoundUp(fileSize, SectorSize);
 	if (freeMap->NumClear() < numSectors) {
 		cerr << "Not enough space!\n";
@@ -86,6 +86,7 @@ LinkedDataSector *SeqDataSectors::Allocate(PersistentBitmap *freeMap, int fileSi
 		}
 	}
 	if (debug->IsEnabled('f')) Debug();
+	return TRUE;
 }
 
 void SeqDataSectors::Deallocate(PersistentBitmap *freeMap) {
@@ -270,12 +271,12 @@ int FileHeader::FileLength()
 //	the data blocks pointed to by the file header.
 //----------------------------------------------------------------------
 
-void FileHeader::Print()
-{
+void LinkedDataSector::Print(int numBytes) {
 	int i, j, k;
 	char *data = new char[SectorSize];
+	numBytes = numBytes < LinkedDirect * SectorSize ? numBytes : LinkedDirect * SectorSize;
+	int numSectors = divRoundUp(numBytes, SectorSize);
 
-	printf("FileHeader contents.  File size: %d.  File blocks:\n", numBytes);
 	for (i = 0; i < numSectors; i++)
 		printf("%d ", dataSectors[i]);
 	printf("\nFile contents:\n");
@@ -292,4 +293,11 @@ void FileHeader::Print()
 		printf("\n");
 	}
 	delete[] data;
+	if (numBytes > LinkedDirect) next->Print(numBytes - LinkedDirect * SectorSize);
+}
+
+void FileHeader::Print()
+{
+	printf("FileHeader contents.  File size: %d.  File blocks:\n", numBytes);
+	dataSectorList.Print(numBytes);
 }
